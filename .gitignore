@@ -1,1 +1,4 @@
 ProjectDetails/*
+build/*
+*.mod
+*.exe
