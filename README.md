@@ -5,7 +5,7 @@ Copyright &copy; 2025 Nguyen Duy Thanh (@Nekkochan0x0007) and NeRF Team. All rig
 
 # Third-parties notices
 
-With reference from Intel Corporation. All the references is
+FORTRAN, FORTRAN documentation and compiler references from Intel Corporation. All the references is
 
 Copyright &copy; 2019 - 2023 Intel Corporation. All right reserved.
 Please refer to the Intel Corporation for more information.
