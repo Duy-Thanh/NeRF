@@ -1,9 +1,9 @@
 # NeRF
 NeRF (Neural Radiance processing for Big-Data process)
 
-Copyright &copy; 2025 NeRF Team. All right reserved
-
 Copyright &copy; 2025 Nguyen Duy Thanh (@Nekkochan0x0007). All right reserved
+
+Copyright &copy; 2025 NeRF Team. All right reserved
 
 # Third-parties notice
 
