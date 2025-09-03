@@ -19,6 +19,8 @@ Intel(R) oneAPI(TM) Fortran Compiler
 
 You must use Linux to compile this program.
 
+Microsoft Windows not supported, and macOS with Apple Silicon is not supported
+
 # License
 
 MIT License (please keep all copyright, do not modify or delete them)
