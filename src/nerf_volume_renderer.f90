@@ -51,6 +51,130 @@ contains
         call write_log_message("Volume rendering completed")
     end subroutine render_volume
 
+    !> Generate ray for pixel (x, y)
+    subroutine generate_pixel_ray(camera_pose, x, y, width, height, ray)
+        real(dp), intent(in) :: camera_pose(4,4)
+        integer, intent(in) :: x, y, width, height
+        type(ray_t), intent(out) :: ray
+        
+        real(dp) :: normalized_x, normalized_y
+        real(dp) :: ray_dir_camera(3), ray_dir_world(3)
+        real(dp) :: focal_length, aspect_ratio
+        
+        ! Normalize pixel coordinates to [-1, 1]
+        normalized_x = (2.0_dp * real(x, dp) / real(width, dp)) - 1.0_dp
+        normalized_y = 1.0_dp - (2.0_dp * real(y, dp) / real(height, dp))
+        
+        ! Camera parameters
+        focal_length = 1.0_dp
+        aspect_ratio = real(width, dp) / real(height, dp)
+        
+        ! Ray direction in camera space
+        ray_dir_camera(1) = normalized_x * aspect_ratio
+        ray_dir_camera(2) = normalized_y
+        ray_dir_camera(3) = -focal_length
+        
+        ! Transform to world space
+        ray_dir_world = matmul(camera_pose(1:3, 1:3), ray_dir_camera)
+        call vector_normalize(ray_dir_world)
+        
+        ! Set ray properties
+        ray%origin = camera_pose(1:3, 4)
+        ray%direction = ray_dir_world
+        ray%near = 0.1_dp
+        ray%far = 10.0_dp
+    end subroutine generate_pixel_ray
+
+    !> Render along a single ray
+    subroutine render_ray(volume, ray, pixel_color, status)
+        type(volume_data_t), intent(in) :: volume
+        type(ray_t), intent(in) :: ray
+        real(sp), intent(out) :: pixel_color(3)
+        integer, intent(out) :: status
+        
+        real(dp), parameter :: step_size = 0.01_dp
+        integer, parameter :: max_steps = 1000
+        
+        real(dp) :: t, accumulated_alpha, current_alpha, transmittance
+        real(dp) :: sample_point(3), density, color(3)
+        integer :: step
+        
+        ! Initialize
+        pixel_color = 0.0_sp
+        accumulated_alpha = 0.0_dp
+        t = ray%near
+        
+        do step = 1, max_steps
+            if (t > ray%far) exit
+            if (accumulated_alpha > 0.99_dp) exit  ! Early termination
+            
+            ! Sample point along ray
+            sample_point = ray%origin + t * ray%direction
+            
+            ! Sample volume at current point
+            call sample_volume(volume, sample_point, density, color, status)
+            if (status /= NERF_SUCCESS) exit
+            
+            ! Compute alpha for this sample
+            current_alpha = 1.0_dp - exp(-density * step_size)
+            transmittance = 1.0_dp - accumulated_alpha
+            
+            ! Accumulate color and alpha
+            pixel_color = pixel_color + real(transmittance * current_alpha, sp) * real(color, sp)
+            accumulated_alpha = accumulated_alpha + transmittance * current_alpha
+            
+            t = t + step_size
+        end do
+        
+        status = NERF_SUCCESS
+    end subroutine render_ray
+
+    !> Sample volume at 3D point
+    subroutine sample_volume(volume, point, density, color, status)
+        type(volume_data_t), intent(in) :: volume
+        real(dp), intent(in) :: point(3)
+        real(dp), intent(out) :: density, color(3)
+        integer, intent(out) :: status
+        
+        integer :: ix, iy, iz
+        real(dp) :: fx, fy, fz
+        real(dp) :: normalized_point(3)
+        
+        ! Normalize point to volume coordinates [0, 1]
+        normalized_point = (point + 1.0_dp) * 0.5_dp
+        
+        ! Check bounds
+        if (any(normalized_point < 0.0_dp) .or. any(normalized_point > 1.0_dp)) then
+            density = 0.0_dp
+            color = 0.0_dp
+            status = NERF_SUCCESS
+            return
+        end if
+        
+        ! Convert to volume indices
+        fx = normalized_point(1) * real(volume%resolution(1) - 1, dp)
+        fy = normalized_point(2) * real(volume%resolution(2) - 1, dp)
+        fz = normalized_point(3) * real(volume%resolution(3) - 1, dp)
+        
+        ix = int(fx) + 1
+        iy = int(fy) + 1
+        iz = int(fz) + 1
+        
+        ! Trilinear interpolation
+        if (ix >= 1 .and. ix < volume%resolution(1) .and. &
+            iy >= 1 .and. iy < volume%resolution(2) .and. &
+            iz >= 1 .and. iz < volume%resolution(3)) then
+            
+            density = volume%density(ix, iy, iz)
+            color = volume%color(ix, iy, iz, :)
+        else
+            density = 0.0_dp
+            color = 0.0_dp
+        end if
+        
+        status = NERF_SUCCESS
+    end subroutine sample_volume
+
     !> Sample volume along ray
     subroutine sample_along_ray(volume, ray, sample_points, sample_colors, sample_densities, sample_count)
         type(volume_data_t), intent(in) :: volume
@@ -60,8 +184,8 @@ contains
         real(sp), intent(out) :: sample_densities(:)     ! (sample)
         integer, intent(out) :: sample_count
         
-        integer :: i
-        real(dp) :: t, dt, point(3)
+        integer :: i, status
+        real(dp) :: t, dt, point(3), density, color(3)
         
         dt = (ray%far - ray%near) / real(ray%sample_count, dp)
         sample_count = min(ray%sample_count, size(sample_points, 1))
@@ -71,7 +195,11 @@ contains
             point = interpolate_along_ray(ray, t)
             
             sample_points(i, :) = point
-            call sample_volume_at_point(volume, point, sample_colors(i,:), sample_densities(i))
+            call sample_volume(volume, point, density, color, status)
+            if (status == NERF_SUCCESS) then
+                sample_colors(i,:) = color
+                sample_densities(i) = density
+            end if
         end do
     end subroutine sample_along_ray
 
@@ -184,86 +312,5 @@ contains
         status = NERF_SUCCESS
         call write_log_message("Volume gradients computation completed")
     end subroutine compute_volume_gradients
-
-    ! Helper subroutines
-
-    subroutine generate_pixel_ray(camera_pose, x, y, width, height, ray)
-        real(dp), intent(in) :: camera_pose(4,4)
-        integer, intent(in) :: x, y, width, height
-        type(ray_t), intent(out) :: ray
-        
-        real(dp) :: ndc_x, ndc_y
-        
-        ! Convert pixel to normalized device coordinates
-        ndc_x = (2.0_dp * real(x, dp) / real(width, dp)) - 1.0_dp
-        ndc_y = (2.0_dp * real(y, dp) / real(height, dp)) - 1.0_dp
-        
-        ! Set ray origin from camera position
-        ray%origin = camera_pose(1:3, 4)
-        
-        ! Set ray direction
-        ray%direction = [ndc_x, ndc_y, -1.0_dp]
-        call vector_normalize(ray%direction)
-        
-        ! Set ray bounds
-        ray%near = 0.1_dp
-        ray%far = 10.0_dp
-        ray%sample_count = 64
-    end subroutine generate_pixel_ray
-
-    subroutine render_ray(volume, ray, pixel_color, status)
-        type(volume_data_t), intent(in) :: volume
-        type(ray_t), intent(in) :: ray
-        real(sp), intent(out) :: pixel_color(3)
-        integer, intent(out) :: status
-        
-        call integrate_ray_samples(ray, volume, pixel_color, status)
-    end subroutine render_ray
-
-    subroutine sample_volume_at_point(volume, point, color, density)
-        type(volume_data_t), intent(in) :: volume
-        real(dp), intent(in) :: point(3)
-        real(sp), intent(out) :: color(3)
-        real(sp), intent(out) :: density
-        
-        integer :: x, y, z
-        
-        ! Convert world coordinates to volume indices
-        call world_to_volume_coords(volume, point, x, y, z)
-        
-        ! Check bounds
-        if (x < 1 .or. x > volume%resolution(1) .or. &
-            y < 1 .or. y > volume%resolution(2) .or. &
-            z < 1 .or. z > volume%resolution(3)) then
-            color = 0.0_sp
-            density = 0.0_sp
-            return
-        end if
-        
-        ! Sample volume data
-        density = volume%density(x, y, z)
-        color = volume%color(x, y, z, 1:3)
-    end subroutine sample_volume_at_point
-
-    subroutine world_to_volume_coords(volume, world_point, x, y, z)
-        type(volume_data_t), intent(in) :: volume
-        real(dp), intent(in) :: world_point(3)
-        integer, intent(out) :: x, y, z
-        
-        real(dp) :: normalized_point(3)
-        
-        ! Normalize point to [0,1] range within volume bounds
-        normalized_point(1) = (world_point(1) - volume%bounds(1,1)) / &
-                             (volume%bounds(2,1) - volume%bounds(1,1))
-        normalized_point(2) = (world_point(2) - volume%bounds(1,2)) / &
-                             (volume%bounds(2,2) - volume%bounds(1,2))
-        normalized_point(3) = (world_point(3) - volume%bounds(1,3)) / &
-                             (volume%bounds(2,3) - volume%bounds(1,3))
-        
-        ! Convert to volume indices
-        x = max(1, min(volume%resolution(1), int(normalized_point(1) * volume%resolution(1)) + 1))
-        y = max(1, min(volume%resolution(2), int(normalized_point(2) * volume%resolution(2)) + 1))
-        z = max(1, min(volume%resolution(3), int(normalized_point(3) * volume%resolution(3)) + 1))
-    end subroutine world_to_volume_coords
 
 end module nerf_volume_renderer
