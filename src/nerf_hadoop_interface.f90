@@ -9,13 +9,11 @@
 
 module nerf_hadoop_interface
     use nerf_types
-    use nerf_mapreduce
     use nerf_utils, only: write_log_message
     implicit none
 
     private
     public :: initialize_hadoop_cluster, shutdown_hadoop_cluster
-    public :: submit_nerf_mapreduce_job, monitor_job_progress
     public :: read_from_hdfs, write_to_hdfs
     public :: setup_hadoop_streaming, configure_cluster_resources
 
@@ -50,60 +48,6 @@ contains
         
         call write_log_message("Hadoop cluster connection closed")
     end subroutine shutdown_hadoop_cluster
-
-    !> Submit NeRF MapReduce job to Hadoop cluster
-    subroutine submit_nerf_mapreduce_job(job_config, job_id, status)
-        type(mapreduce_job_t), intent(in) :: job_config
-        character(len=256), intent(out) :: job_id
-        integer, intent(out) :: status
-        
-        character(len=1024) :: hadoop_command
-        character(len=256) :: jar_path, mapper_class, reducer_class
-        
-        call write_log_message("Submitting NeRF MapReduce job...")
-        
-        ! Set Hadoop streaming jar path
-        jar_path = "/opt/hadoop/share/hadoop/tools/lib/hadoop-streaming.jar"
-        mapper_class = "nerf_face_mapper"
-        reducer_class = "nerf_volume_reducer"
-        
-        ! Build Hadoop streaming command step by step
-        hadoop_command = "hadoop jar " // trim(jar_path)
-        hadoop_command = trim(hadoop_command) // " -files nerf_face_mapper,nerf_volume_reducer"
-        hadoop_command = trim(hadoop_command) // " -mapper " // trim(mapper_class)
-        hadoop_command = trim(hadoop_command) // " -reducer " // trim(reducer_class)
-        hadoop_command = trim(hadoop_command) // " -input " // trim(job_config%input_path)
-        hadoop_command = trim(hadoop_command) // " -output " // trim(job_config%output_path)
-        
-        ! TODO: Execute Hadoop command
-        ! TODO: Parse job ID from command output
-        job_id = "job_" // trim(job_config%job_id)
-        
-        status = NERF_SUCCESS
-        call write_log_message("NeRF MapReduce job submitted: " // trim(job_id))
-    end subroutine submit_nerf_mapreduce_job
-
-    !> Monitor MapReduce job progress
-    subroutine monitor_job_progress(job_id, progress_percent, job_status, status)
-        character(len=*), intent(in) :: job_id
-        real, intent(out) :: progress_percent
-        character(len=64), intent(out) :: job_status
-        integer, intent(out) :: status
-        
-        character(len=512) :: status_command
-        
-        ! Build job status command
-        write(status_command, '(A)') "hadoop job -status " // trim(job_id)
-        
-        ! TODO: Execute status command
-        ! TODO: Parse progress and status from output
-        
-        ! Simulate job progress
-        progress_percent = 85.0
-        job_status = "RUNNING"
-        
-        status = NERF_SUCCESS
-    end subroutine monitor_job_progress
 
     !> Read data from HDFS
     subroutine read_from_hdfs(hdfs_path, local_buffer, buffer_size, bytes_read, status)

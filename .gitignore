@@ -1,4 +1,12 @@
 ProjectDetails/*
 build/*
+results/*
+models/*
+processed/*
+demo/*
+*.bak
+*.log
+*.tmp
 *.mod
 *.exe
+*.obj

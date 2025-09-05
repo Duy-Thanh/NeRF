@@ -14,12 +14,16 @@ program nerf_bigdata_main
     use nerf_face_processor
     use nerf_volume_renderer
     use nerf_hadoop_interface
+    use nerf_neural_network
     implicit none
 
     ! Configuration and status variables
     type(nerf_config_t) :: config
     integer :: status
     character(len=512) :: cluster_info
+    
+    ! Neural network
+    type(nerf_mlp_t) :: nerf_network
     
     ! Job management
     type(mapreduce_job_t) :: main_job
@@ -31,6 +35,7 @@ program nerf_bigdata_main
     type(face_image_t), allocatable :: face_dataset(:)
     type(volume_data_t) :: final_volume
     integer :: image_count
+    integer, allocatable :: segmentation_masks(:,:)
     
     ! Timing variables
     real :: start_time, end_time, elapsed_time
