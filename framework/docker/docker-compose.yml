@@ -1,0 +1,150 @@
+version: "3.8"
+
+services:
+  # Redis for metadata and task queues
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MinIO for object storage
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: daf_user
+      MINIO_ROOT_PASSWORD: daf_password_123
+      MINIO_STORAGE_CLASS_STANDARD: EC:0
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # DAF Coordinator (Master)
+  coordinator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.coordinator
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - DAF_REDIS_HOST=redis
+      - DAF_REDIS_PORT=6379
+      - DAF_MINIO_ENDPOINT=minio:9000
+      - DAF_MINIO_ACCESS_KEY=daf_user
+      - DAF_MINIO_SECRET_KEY=daf_password_123
+      - DAF_COORDINATOR_PORT=50051
+      - DAF_LOG_LEVEL=INFO
+      - DAF_MAX_MEMORY_MB=400
+    ports:
+      - "50051:50051"
+      - "8080:8080"  # Web UI
+    volumes:
+      - coordinator-logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # DAF Workers (multiple instances)
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      - DAF_COORDINATOR_HOST=coordinator
+      - DAF_COORDINATOR_PORT=50051
+      - DAF_REDIS_HOST=redis
+      - DAF_REDIS_PORT=6379
+      - DAF_MINIO_ENDPOINT=minio:9000
+      - DAF_MINIO_ACCESS_KEY=daf_user
+      - DAF_MINIO_SECRET_KEY=daf_password_123
+      - DAF_WORKER_PORT=50052
+      - DAF_LOG_LEVEL=INFO
+      - DAF_MAX_MEMORY_MB=400
+      - DAF_PLUGIN_DIR=/app/plugins
+    volumes:
+      - ./plugins:/app/plugins:ro
+      - worker-temp:/tmp/daf
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+      replicas: 3
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50052"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # Web UI for monitoring (optional)
+  web-ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webui
+    depends_on:
+      - coordinator
+    environment:
+      - DAF_COORDINATOR_HOST=coordinator
+      - DAF_COORDINATOR_PORT=50051
+    ports:
+      - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+volumes:
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  coordinator-logs:
+    driver: local
+  worker-temp:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

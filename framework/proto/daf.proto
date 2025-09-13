@@ -1,0 +1,210 @@
+syntax = "proto3";
+
+package daf;
+
+option cc_enable_arenas = true;
+
+// Core distributed framework services
+service CoordinatorService {
+  // Worker registration and heartbeat
+  rpc RegisterWorker(WorkerInfo) returns (RegistrationResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Job management
+  rpc SubmitJob(JobRequest) returns (JobResponse);
+  rpc GetJobStatus(JobStatusRequest) returns (JobStatusResponse);
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+  
+  // Task management
+  rpc GetTask(TaskRequest) returns (TaskResponse);
+  rpc ReportTaskResult(TaskResult) returns (TaskResultResponse);
+}
+
+service WorkerService {
+  // Task execution
+  rpc ExecuteMapTask(MapTaskRequest) returns (MapTaskResponse);
+  rpc ExecuteReduceTask(ReduceTaskRequest) returns (ReduceTaskResponse);
+  
+  // Data transfer for shuffle phase
+  rpc GetPartitionData(PartitionRequest) returns (stream PartitionData);
+  rpc PutPartitionData(stream PartitionData) returns (PartitionResponse);
+}
+
+// Messages for worker registration
+message WorkerInfo {
+  string worker_id = 1;
+  string host = 2;
+  int32 port = 3;
+  int64 memory_mb = 4;
+  int32 cpu_cores = 5;
+  repeated string supported_plugins = 6;
+}
+
+message RegistrationResponse {
+  bool success = 1;
+  string message = 2;
+  string assigned_worker_id = 3;
+}
+
+// Heartbeat messages
+message HeartbeatRequest {
+  string worker_id = 1;
+  WorkerStatus status = 2;
+  repeated TaskStatus running_tasks = 3;
+}
+
+message HeartbeatResponse {
+  bool success = 1;
+  repeated string tasks_to_cancel = 2;
+}
+
+// Job management messages
+message JobRequest {
+  string job_id = 1;
+  string plugin_name = 2;
+  map<string, string> config = 3;
+  repeated string input_paths = 4;
+  string output_path = 5;
+  int32 num_map_tasks = 6;
+  int32 num_reduce_tasks = 7;
+}
+
+message JobResponse {
+  bool success = 1;
+  string message = 2;
+  string job_id = 3;
+}
+
+message JobStatusRequest {
+  string job_id = 1;
+}
+
+message JobStatusResponse {
+  string job_id = 1;
+  JobState state = 2;
+  float progress = 3;
+  string message = 4;
+  repeated TaskStatus task_statuses = 5;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Task management messages
+message TaskRequest {
+  string worker_id = 1;
+}
+
+message TaskResponse {
+  bool has_task = 1;
+  Task task = 2;
+}
+
+message Task {
+  string task_id = 1;
+  string job_id = 2;
+  TaskType type = 3;
+  string plugin_name = 4;
+  map<string, string> config = 5;
+  repeated string input_paths = 6;
+  string output_path = 7;
+  int32 partition_id = 8;
+}
+
+message TaskResult {
+  string task_id = 1;
+  string worker_id = 2;
+  TaskState state = 3;
+  string message = 4;
+  repeated string output_paths = 5;
+  map<string, int64> metrics = 6;
+}
+
+message TaskResultResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Map/Reduce task execution messages
+message MapTaskRequest {
+  Task task = 1;
+}
+
+message MapTaskResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string intermediate_paths = 3;
+  map<string, int64> metrics = 4;
+}
+
+message ReduceTaskRequest {
+  Task task = 1;
+  repeated string intermediate_paths = 2;
+}
+
+message ReduceTaskResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string output_paths = 3;
+  map<string, int64> metrics = 4;
+}
+
+// Data transfer messages for shuffle
+message PartitionRequest {
+  string job_id = 1;
+  int32 partition_id = 2;
+  string requester_worker_id = 3;
+}
+
+message PartitionData {
+  bytes data = 1;
+  bool is_last_chunk = 2;
+}
+
+message PartitionResponse {
+  bool success = 1;
+  string message = 2;
+  int64 bytes_transferred = 3;
+}
+
+// Enums
+enum JobState {
+  JOB_PENDING = 0;
+  JOB_RUNNING = 1;
+  JOB_COMPLETED = 2;
+  JOB_FAILED = 3;
+  JOB_CANCELLED = 4;
+}
+
+enum TaskType {
+  TASK_MAP = 0;
+  TASK_REDUCE = 1;
+}
+
+enum TaskState {
+  TASK_PENDING = 0;
+  TASK_RUNNING = 1;
+  TASK_COMPLETED = 2;
+  TASK_FAILED = 3;
+  TASK_CANCELLED = 4;
+}
+
+enum WorkerStatus {
+  WORKER_IDLE = 0;
+  WORKER_BUSY = 1;
+  WORKER_OVERLOADED = 2;
+  WORKER_ERROR = 3;
+}
+
+message TaskStatus {
+  string task_id = 1;
+  TaskState state = 2;
+  float progress = 3;
+  string message = 4;
+}

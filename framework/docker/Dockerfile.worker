@@ -1,0 +1,76 @@
+# Multi-stage build for worker
+FROM ubuntu:22.04 as builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libgrpc++-dev \
+    libgrpc-dev \
+    libssl-dev \
+    libhiredis-dev \
+    libjsoncpp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build the project
+RUN mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc) daf_worker
+
+# Production stage
+FROM ubuntu:22.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libprotobuf32 \
+    libgrpc++1 \
+    libssl3 \
+    libhiredis0.14 \
+    libjsoncpp25 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install grpc health probe for health checks
+RUN curl -L https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.19/grpc_health_probe-linux-amd64 \
+    -o /usr/local/bin/grpc_health_probe && \
+    chmod +x /usr/local/bin/grpc_health_probe
+
+# Create app user for security
+RUN useradd -r -s /bin/false -d /app daf
+
+# Create directories
+RUN mkdir -p /app/plugins /app/temp /app/logs && \
+    chown -R daf:daf /app
+
+# Copy binary from builder stage
+COPY --from=builder /build/build/daf_worker /app/daf_worker
+RUN chown daf:daf /app/daf_worker && chmod +x /app/daf_worker
+
+# Switch to app user
+USER daf
+WORKDIR /app
+
+# Set memory limits via environment
+ENV DAF_MAX_MEMORY_MB=400
+ENV DAF_ENABLE_MEMORY_MONITORING=1
+ENV DAF_PLUGIN_DIR=/app/plugins
+ENV DAF_TEMP_DIR=/app/temp
+
+# Expose worker port
+EXPOSE 50052
+
+# Health check
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD grpc_health_probe -addr=localhost:50052
+
+# Run worker
+CMD ["./daf_worker"]
