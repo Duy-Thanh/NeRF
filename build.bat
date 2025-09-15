@@ -1,44 +1,41 @@
 @echo off
-REM Windows build script for NeRF project
+REM Windows build script for C++ MapReduce Framework (No Fortran)
 
-echo [INFO] Setting up Intel oneAPI environment...
-call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 > nul 2>&1
+echo [INFO] Building C++ MapReduce framework...
 
-if errorlevel 1 (
-    echo [ERROR] Failed to initialize Intel oneAPI environment
-    exit /b 1
-)
+REM Create build directories
+if not exist build\bin mkdir build\bin
+if not exist build\obj mkdir build\obj
 
-echo [INFO] Building NeRF project...
-
-REM Compile Fortran modules
-ifx /c /O3 /QxHost /module:build\obj src\nerf_types.f90 /object:build\obj\nerf_types.obj
+REM Build core framework (using CMake)
+cd framework
+if exist build rmdir /s /q build
+mkdir build
+cd build
+cmake -G "NMake Makefiles" ..
 if errorlevel 1 goto :error
-
-ifx /c /O3 /QxHost /module:build\obj src\nerf_utils.f90 /object:build\obj\nerf_utils.obj
+nmake
 if errorlevel 1 goto :error
+cd ..\..
 
-ifx /c /O3 /QxHost /module:build\obj src\nerf_neural_network.f90 /object:build\obj\nerf_neural_network.obj
+REM Build plugins
+cd plugins
+if exist build rmdir /s /q build
+mkdir build
+cd build
+cmake -G "NMake Makefiles" ..
 if errorlevel 1 goto :error
-
-ifx /c /O3 /QxHost /module:build\obj src\nerf_face_processor.f90 /object:build\obj\nerf_face_processor.obj
+nmake
 if errorlevel 1 goto :error
+cd ..\..
 
-ifx /c /O3 /QxHost /module:build\obj src\nerf_volume_renderer.f90 /object:build\obj\nerf_volume_renderer.obj
-if errorlevel 1 goto :error
-
-ifx /c /O3 /QxHost /module:build\obj src\nerf_mapreduce.f90 /object:build\obj\nerf_mapreduce.obj
-if errorlevel 1 goto :error
-
-ifx /c /O3 /QxHost /module:build\obj src\nerf_hadoop_interface.f90 /object:build\obj\nerf_hadoop_interface.obj
-if errorlevel 1 goto :error
-
-REM Link main executable
-ifx /O3 /QxHost /module:build\obj src\main.f90 build\obj\*.obj /exe:build\bin\nerf_bigdata.exe
+REM Build Docker images (requires Docker Desktop for Windows)
+echo [INFO] Building Docker images...
+docker-compose -f framework\docker\docker-compose.yml build
 if errorlevel 1 goto :error
 
 echo [SUCCESS] Build completed successfully!
-echo [INFO] Executable created: build\bin\nerf_bigdata.exe
+echo [INFO] Framework and plugins built. Docker images are ready.
 goto :end
 
 :error
