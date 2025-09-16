@@ -1,0 +1,3 @@
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\nerf_avatar_plugin.dir/objects.a
+D:\mingw64\bin\ar.exe qc CMakeFiles\nerf_avatar_plugin.dir/objects.a @CMakeFiles\nerf_avatar_plugin.dir\objects1.rsp
+D:\mingw64\bin\g++.exe -O3 -DNDEBUG -shared -o nerf_avatar_plugin.dll -Wl,--out-implib,libnerf_avatar_plugin.dll.a -Wl,--major-image-version,0,--minor-image-version,0 -Wl,--whole-archive CMakeFiles\nerf_avatar_plugin.dir/objects.a -Wl,--no-whole-archive @CMakeFiles\nerf_avatar_plugin.dir\linkLibs.rsp

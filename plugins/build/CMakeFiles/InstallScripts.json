@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/NeRF/plugins/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

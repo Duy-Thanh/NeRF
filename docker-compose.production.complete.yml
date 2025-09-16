@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # Redis database for production
+  redis:
+    image: redis:7-alpine
+    container_name: daf_redis_production
+    restart: unless-stopped
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - daf_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Production Coordinator with NeRF capabilities
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.production.complete
+    container_name: daf_coordinator_production
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - HTTP_PORT=8080
+      - GRPC_PORT=50051
+      - DAF_LOG_LEVEL=INFO
+    volumes:
+      - coordinator_data:/app/data
+      - coordinator_logs:/app/logs
+    networks:
+      - daf_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Production Worker with NeRF processing
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.production.complete
+    command: ./bin/worker_production
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COORDINATOR_HOST=coordinator
+      - COORDINATOR_PORT=50051
+      - DAF_LOG_LEVEL=INFO
+    volumes:
+      - worker_data:/app/data
+      - worker_logs:/app/logs
+    networks:
+      - daf_network
+    deploy:
+      replicas: 2
+
+  # Optional: Redis monitoring
+  redis_commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis_commander
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - daf_network
+
+volumes:
+  redis_data:
+    driver: local
+  coordinator_data:
+    driver: local
+  coordinator_logs:
+    driver: local
+  worker_data:
+    driver: local
+  worker_logs:
+    driver: local
+
+networks:
+  daf_network:
+    driver: bridge

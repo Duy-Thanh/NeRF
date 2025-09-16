@@ -1,0 +1,91 @@
+cmake_minimum_required(VERSION 3.16)
+project(DAF_Production_System)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HIREDIS REQUIRED hiredis)
+find_package(OpenSSL REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system filesystem)
+
+# Include directories
+include_directories(src/common)
+include_directories(src/storage)
+include_directories(src/coordinator)
+include_directories(src/worker)
+
+# Common library with all production utilities
+add_library(daf_production_common STATIC
+    src/common/daf_utils.cpp
+    src/common/plugin_loader.cpp
+    src/storage/redis_client_production.cpp
+)
+
+target_link_libraries(daf_production_common
+    ${HIREDIS_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    ${Boost_LIBRARIES}
+)
+
+target_include_directories(daf_production_common PUBLIC
+    ${HIREDIS_INCLUDE_DIRS}
+    ${Boost_INCLUDE_DIRS}
+)
+
+target_link_directories(daf_production_common PUBLIC
+    ${HIREDIS_LIBRARY_DIRS}
+    ${Boost_LIBRARY_DIRS}
+)
+
+# Production Coordinator with cpprest HTTP server
+add_executable(coordinator_production
+    src/coordinator/production_coordinator.cpp
+    src/coordinator/main_production.cpp
+)
+
+target_link_libraries(coordinator_production
+    daf_production_common
+    pthread
+)
+
+# Production Worker
+add_executable(worker_production
+    src/worker/main.cpp
+)
+
+target_link_libraries(worker_production
+    daf_production_common
+    pthread
+)
+
+# NeRF Avatar Plugin (shared library)
+add_library(nerf_avatar_plugin SHARED
+    ../plugins/nerf_avatar/nerf_avatar_plugin.cpp
+)
+
+target_include_directories(nerf_avatar_plugin PUBLIC
+    src/common
+    ../plugins/nerf_avatar
+)
+
+target_link_libraries(nerf_avatar_plugin
+    daf_production_common
+)
+
+# Redis Demo (for testing)
+add_executable(redis_demo
+    src/demo_main.cpp
+)
+
+target_link_libraries(redis_demo
+    daf_production_common
+)
+
+# Install targets
+install(TARGETS coordinator_production worker_production redis_demo nerf_avatar_plugin
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+)

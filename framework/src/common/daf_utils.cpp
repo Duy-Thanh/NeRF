@@ -1,67 +1,134 @@
-#include "daf_types.h"
-#include <filesystem>
+#include "daf_utils.h"
+#include <iostream>
 #include <fstream>
 #include <sstream>
-#include <algorithm>
-#include <sys/resource.h>
-#include <unistd.h>
-#include <openssl/sha.h>
-#include <iomanip>
 #include <chrono>
+#include <algorithm>
+#include <cctype>
+#include <iomanip>
+#include <cstdlib>
+
+#ifdef _WIN32
+    #include <windows.h>
+    #include <psapi.h>
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #include <io.h>
+    #include <direct.h>
+    #pragma comment(lib, "ws2_32.lib")
+    #pragma comment(lib, "psapi.lib")
+#else
+    #include <unistd.h>
+    #include <sys/stat.h>
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <ifaddrs.h>
+    #include <netdb.h>
+    #include <sys/resource.h>
+    #include <cstring>
+#endif
 
 namespace daf {
-namespace utils {
 
-size_t GetCurrentMemoryUsageMB() {
-    struct rusage usage;
-    if (getrusage(RUSAGE_SELF, &usage) == 0) {
-        // ru_maxrss is in KB on Linux
-        return usage.ru_maxrss / 1024;
-    }
-    return 0;
+// PluginLoader implementation
+PluginLoader::PluginLoader() 
+    : handle_(nullptr), map_function_(nullptr), reduce_function_(nullptr), is_loaded_(false) {
 }
 
-size_t GetAvailableMemoryMB() {
-    long pages = sysconf(_SC_PHYS_PAGES);
-    long page_size = sysconf(_SC_PAGE_SIZE);
-    return (pages * page_size) / (1024 * 1024);
+PluginLoader::~PluginLoader() {
+    unload_plugin();
 }
 
-bool IsMemoryPressure() {
-    size_t current = GetCurrentMemoryUsageMB();
-    size_t available = GetAvailableMemoryMB();
+ErrorCode PluginLoader::load_plugin(const std::string& plugin_path) {
+    unload_plugin();
     
-    // Memory pressure if using more than 80% of available memory
-    return current > (available * 0.8);
+#ifdef _WIN32
+    handle_ = LoadLibraryA(plugin_path.c_str());
+    if (!handle_) {
+        DWORD error = GetLastError();
+        last_error_ = "Failed to load plugin: " + std::to_string(error);
+        return ErrorCode::PLUGIN_ERROR;
+    }
+    
+    map_function_ = reinterpret_cast<MapFunction>(GetProcAddress(handle_, "MapMain"));
+    reduce_function_ = reinterpret_cast<ReduceFunction>(GetProcAddress(handle_, "ReduceMain"));
+#else
+    handle_ = dlopen(plugin_path.c_str(), RTLD_LAZY);
+    if (!handle_) {
+        last_error_ = "Failed to load plugin: " + std::string(dlerror());
+        return ErrorCode::PLUGIN_ERROR;
+    }
+    
+    map_function_ = reinterpret_cast<MapFunction>(dlsym(handle_, "MapMain"));
+    reduce_function_ = reinterpret_cast<ReduceFunction>(dlsym(handle_, "ReduceMain"));
+#endif
+    
+    is_loaded_ = true;
+    return ErrorCode::SUCCESS;
 }
 
-bool FileExists(const std::string& path) {
-    return std::filesystem::exists(path);
+void PluginLoader::unload_plugin() {
+    if (handle_) {
+#ifdef _WIN32
+        FreeLibrary(handle_);
+#else
+        dlclose(handle_);
+#endif
+        handle_ = nullptr;
+    }
+    
+    map_function_ = nullptr;
+    reduce_function_ = nullptr;
+    is_loaded_ = false;
 }
 
-size_t GetFileSize(const std::string& path) {
-    try {
-        return std::filesystem::file_size(path);
-    } catch (const std::filesystem::filesystem_error&) {
+MapFunction PluginLoader::get_map_function() const {
+    return map_function_;
+}
+
+ReduceFunction PluginLoader::get_reduce_function() const {
+    return reduce_function_;
+}
+
+bool PluginLoader::is_loaded() const {
+    return is_loaded_;
+}
+
+std::string PluginLoader::get_last_error() const {
+    return last_error_;
+}
+
+// Utils implementation
+bool Utils::file_exists(const std::string& path) {
+#ifdef _WIN32
+    return _access(path.c_str(), 0) == 0;
+#else
+    return access(path.c_str(), F_OK) == 0;
+#endif
+}
+
+bool Utils::create_directory(const std::string& path) {
+#ifdef _WIN32
+    return _mkdir(path.c_str()) == 0 || errno == EEXIST;
+#else
+    return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST;
+#endif
+}
+
+bool Utils::delete_file(const std::string& path) {
+    return std::remove(path.c_str()) == 0;
+}
+
+size_t Utils::get_file_size(const std::string& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
         return 0;
     }
+    return static_cast<size_t>(file.tellg());
 }
 
-std::vector<std::string> ListFiles(const std::string& directory) {
-    std::vector<std::string> files;
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-            if (entry.is_regular_file()) {
-                files.push_back(entry.path().string());
-            }
-        }
-    } catch (const std::filesystem::filesystem_error&) {
-        // Return empty vector on error
-    }
-    return files;
-}
-
-std::vector<std::string> Split(const std::string& str, char delimiter) {
+std::vector<std::string> Utils::split(const std::string& str, char delimiter) {
     std::vector<std::string> tokens;
     std::stringstream ss(str);
     std::string token;
@@ -73,95 +140,199 @@ std::vector<std::string> Split(const std::string& str, char delimiter) {
     return tokens;
 }
 
-std::string Join(const std::vector<std::string>& parts, const std::string& delimiter) {
-    if (parts.empty()) return "";
-    
-    std::stringstream ss;
-    ss << parts[0];
-    
-    for (size_t i = 1; i < parts.size(); ++i) {
-        ss << delimiter << parts[i];
+std::string Utils::trim(const std::string& str) {
+    size_t start = str.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) {
+        return "";
     }
     
-    return ss.str();
+    size_t end = str.find_last_not_of(" \t\n\r");
+    return str.substr(start, end - start + 1);
 }
 
-std::string Trim(const std::string& str) {
-    auto start = str.begin();
-    auto end = str.end();
-    
-    // Trim leading whitespace
-    start = std::find_if(start, end, [](unsigned char ch) {
-        return !std::isspace(ch);
-    });
-    
-    // Trim trailing whitespace
-    end = std::find_if(str.rbegin(), str.rend(), [](unsigned char ch) {
-        return !std::isspace(ch);
-    }).base();
-    
-    return std::string(start, end);
+std::string Utils::to_lower(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
 }
 
-int64_t GetCurrentTimestamp() {
+int64_t Utils::get_timestamp_ms() {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-std::string FormatTimestamp(int64_t timestamp) {
-    auto time_point = std::chrono::system_clock::from_time_t(timestamp / 1000);
+std::string Utils::format_timestamp(int64_t timestamp_ms) {
+    auto time_point = std::chrono::system_clock::from_time_t(timestamp_ms / 1000);
     auto time_t = std::chrono::system_clock::to_time_t(time_point);
-    
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
-    
-    // Add milliseconds
-    int ms = timestamp % 1000;
-    ss << "." << std::setfill('0') << std::setw(3) << ms;
-    
     return ss.str();
 }
 
-std::string ComputeHash(const std::string& data) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, data.c_str(), data.size());
-    SHA256_Final(hash, &sha256);
-    
-    std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+size_t Utils::get_memory_usage() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        return pmc.WorkingSetSize / (1024 * 1024); // Convert to MB
     }
-    
-    return ss.str();
+    return 0;
+#else
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        return usage.ru_maxrss / 1024; // Convert to MB (Linux reports in KB)
+    }
+    return 0;
+#endif
 }
 
-std::string ComputeFileHash(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return "";
+size_t Utils::get_available_memory() {
+#ifdef _WIN32
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&memInfo)) {
+        return memInfo.ullAvailPhys / (1024 * 1024); // Convert to MB
     }
-    
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    
-    char buffer[8192];
-    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
-        SHA256_Update(&sha256, buffer, file.gcount());
-    }
-    
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_Final(hash, &sha256);
-    
-    std::stringstream ss;
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-    }
-    
-    return ss.str();
+    return 0;
+#else
+    long pages = sysconf(_SC_AVPHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    return (pages * page_size) / (1024 * 1024); // Convert to MB
+#endif
 }
 
-} // namespace utils
+bool Utils::is_port_available(int port) {
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return false;
+    }
+#endif
+    
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return false;
+    }
+    
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    
+    bool available = bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
+    
+#ifdef _WIN32
+    closesocket(sockfd);
+    WSACleanup();
+#else
+    close(sockfd);
+#endif
+    
+    return available;
+}
+
+std::string Utils::get_local_ip() {
+    // Production implementation: Get actual local IP address
+#ifdef _WIN32
+    // Windows implementation
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return "127.0.0.1"; // Fallback
+    }
+    
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        struct hostent* host_entry = gethostbyname(hostname);
+        if (host_entry != nullptr && host_entry->h_addr_list[0] != nullptr) {
+            struct in_addr addr;
+            memcpy(&addr, host_entry->h_addr_list[0], sizeof(struct in_addr));
+            std::string ip = inet_ntoa(addr);
+            WSACleanup();
+            return ip;
+        }
+    }
+    WSACleanup();
+    return "127.0.0.1"; // Fallback
+#else
+    // Linux implementation
+    struct ifaddrs *ifaddr, *ifa;
+    int family, s;
+    char host[NI_MAXHOST];
+    
+    if (getifaddrs(&ifaddr) == -1) {
+        return "127.0.0.1"; // Fallback
+    }
+    
+    // Look for first non-loopback IPv4 address
+    for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr) continue;
+        
+        family = ifa->ifa_addr->sa_family;
+        if (family == AF_INET) {
+            s = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+                          host, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST);
+            if (s == 0 && strcmp(host, "127.0.0.1") != 0) {
+                freeifaddrs(ifaddr);
+                return std::string(host);
+            }
+        }
+    }
+    
+    freeifaddrs(ifaddr);
+    return "127.0.0.1"; // Fallback
+#endif
+}
+
+std::string Utils::getenv_or_default(const std::string& var_name, const std::string& default_value) {
+    const char* env_value = std::getenv(var_name.c_str());
+    return (env_value != nullptr) ? std::string(env_value) : default_value;
+}
+
+// Logger implementation
+Logger::Level Logger::current_level_ = Logger::Level::INFO;
+
+void Logger::set_level(Level level) {
+    current_level_ = level;
+}
+
+void Logger::log(Level level, const std::string& message) {
+    if (level < current_level_) {
+        return;
+    }
+    
+    auto timestamp = Utils::get_timestamp_ms();
+    std::cout << "[" << Utils::format_timestamp(timestamp) << "] "
+              << "[" << level_to_string(level) << "] "
+              << message << std::endl;
+}
+
+void Logger::debug(const std::string& message) {
+    log(Level::DEBUG, message);
+}
+
+void Logger::info(const std::string& message) {
+    log(Level::INFO, message);
+}
+
+void Logger::warning(const std::string& message) {
+    log(Level::WARNING, message);
+}
+
+void Logger::error(const std::string& message) {
+    log(Level::ERR, message);
+}
+
+std::string Logger::level_to_string(Level level) {
+    switch (level) {
+        case Level::DEBUG: return "DEBUG";
+        case Level::INFO: return "INFO";
+        case Level::WARNING: return "WARN";
+        case Level::ERR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
 } // namespace daf

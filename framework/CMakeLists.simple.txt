@@ -1,0 +1,65 @@
+cmake_minimum_required(VERSION 3.16)
+project(DAF_Production)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HIREDIS REQUIRED hiredis)
+pkg_check_modules(CPPREST REQUIRED cpprest)
+find_package(OpenSSL REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system filesystem)
+
+# Include directories
+include_directories(src/common)
+include_directories(src/storage)
+include_directories(src/coordinator)
+
+# Common library
+add_library(daf_common STATIC
+    src/common/daf_utils.cpp
+    src/common/plugin_loader.cpp
+    src/storage/redis_client_production.cpp
+)
+
+target_link_libraries(daf_common
+    ${HIREDIS_LIBRARIES}
+    ${CPPREST_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
+target_include_directories(daf_common PUBLIC
+    ${HIREDIS_INCLUDE_DIRS}
+    ${CPPREST_INCLUDE_DIRS}
+)
+
+target_link_directories(daf_common PUBLIC
+    ${HIREDIS_LIBRARY_DIRS}
+    ${CPPREST_LIBRARY_DIRS}
+)
+
+# Coordinator executable
+add_executable(coordinator_production
+    src/coordinator/production_coordinator.cpp
+)
+
+target_link_libraries(coordinator_production
+    daf_common
+    ${CPPREST_LIBRARIES}
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# Worker executable (placeholder)
+add_executable(worker_production
+    src/coordinator/production_coordinator.cpp  # Will create separate worker later
+)
+
+target_link_libraries(worker_production
+    daf_common
+    ${CPPREST_LIBRARIES}
+    ${Boost_LIBRARIES}
+    pthread
+)

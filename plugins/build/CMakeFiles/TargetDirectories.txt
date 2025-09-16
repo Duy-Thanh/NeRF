@@ -1,0 +1,7 @@
+D:/NeRF/plugins/build/CMakeFiles/nerf_avatar_plugin.dir
+D:/NeRF/plugins/build/CMakeFiles/edit_cache.dir
+D:/NeRF/plugins/build/CMakeFiles/rebuild_cache.dir
+D:/NeRF/plugins/build/CMakeFiles/list_install_components.dir
+D:/NeRF/plugins/build/CMakeFiles/install.dir
+D:/NeRF/plugins/build/CMakeFiles/install/local.dir
+D:/NeRF/plugins/build/CMakeFiles/install/strip.dir

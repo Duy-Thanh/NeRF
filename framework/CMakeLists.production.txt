@@ -1,0 +1,191 @@
+cmake_minimum_required(VERSION 3.16)
+project(DAF_Production VERSION 1.0.0 LANGUAGES CXX)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Production build options
+option(USE_REAL_REDIS "Use real Redis with hiredis" ON)
+option(USE_REAL_HTTP "Use real HTTP server with cpprest" ON)
+option(USE_GRPC "Use gRPC for communication" ON)
+option(ENABLE_TESTS "Build tests" OFF)
+
+# Build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Compiler flags for production
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -DPRODUCTION_BUILD")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG_BUILD")
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+
+# Redis support
+if(USE_REAL_REDIS)
+    pkg_check_modules(HIREDIS REQUIRED hiredis)
+    add_definitions(-DUSE_REAL_REDIS)
+endif()
+
+# HTTP support
+if(USE_REAL_HTTP)
+    find_package(cpprestsdk REQUIRED)
+    add_definitions(-DUSE_REAL_HTTP)
+endif()
+
+# gRPC support
+if(USE_GRPC)
+    find_package(Protobuf REQUIRED)
+    find_package(gRPC REQUIRED)
+    add_definitions(-DUSE_GRPC)
+endif()
+
+# OpenSSL for TLS
+find_package(OpenSSL REQUIRED)
+
+# Boost for additional utilities
+find_package(Boost REQUIRED COMPONENTS system filesystem thread)
+
+# Include directories
+include_directories(src)
+include_directories(src/common)
+include_directories(src/storage)
+include_directories(src/coordinator)
+include_directories(src/worker)
+
+# Common library
+set(COMMON_SOURCES
+    src/common/daf_types.h
+    src/common/daf_utils.cpp
+    src/common/logger.cpp
+)
+
+add_library(daf_common_production STATIC ${COMMON_SOURCES})
+target_include_directories(daf_common_production PUBLIC src)
+
+# Storage library with real Redis
+set(STORAGE_SOURCES
+    src/storage/redis_client_production.h
+    src/storage/redis_client_production.cpp
+)
+
+add_library(daf_storage_production STATIC ${STORAGE_SOURCES})
+target_include_directories(daf_storage_production PUBLIC src)
+target_link_libraries(daf_storage_production 
+    daf_common_production
+    ${HIREDIS_LIBRARIES}
+)
+
+# Coordinator with real HTTP and gRPC
+set(COORDINATOR_SOURCES
+    src/coordinator/production_coordinator.h
+    src/coordinator/production_coordinator.cpp
+    src/coordinator/main_production.cpp
+)
+
+add_executable(coordinator_production ${COORDINATOR_SOURCES})
+target_link_libraries(coordinator_production
+    daf_storage_production
+    daf_common_production
+    cpprestsdk::cpprest
+    ${HIREDIS_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Boost::system
+    Boost::filesystem
+    Boost::thread
+    pthread
+)
+
+# Set production-specific compiler definitions
+target_compile_definitions(coordinator_production PRIVATE
+    PRODUCTION_BUILD
+    USE_REAL_REDIS
+    USE_REAL_HTTP
+)
+
+# Worker with real gRPC client
+set(WORKER_SOURCES
+    src/worker/production_worker.h
+    src/worker/production_worker.cpp
+    src/worker/main_production.cpp
+)
+
+add_executable(worker_production ${WORKER_SOURCES})
+target_link_libraries(worker_production
+    daf_storage_production
+    daf_common_production
+    ${HIREDIS_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Boost::system
+    Boost::filesystem
+    Boost::thread
+    pthread
+)
+
+# Set production-specific compiler definitions
+target_compile_definitions(worker_production PRIVATE
+    PRODUCTION_BUILD
+    USE_REAL_REDIS
+    USE_GRPC
+)
+
+# gRPC proto files (if using gRPC)
+if(USE_GRPC)
+    set(PROTO_FILES
+        proto/daf.proto
+    )
+    
+    # Generate gRPC files
+    protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+    grpc_generate_cpp(GRPC_SRCS GRPC_HDRS ${PROTO_FILES})
+    
+    # Add generated files to targets
+    target_sources(coordinator_production PRIVATE ${PROTO_SRCS} ${GRPC_SRCS})
+    target_sources(worker_production PRIVATE ${PROTO_SRCS} ${GRPC_SRCS})
+    
+    # Link gRPC libraries
+    target_link_libraries(coordinator_production gRPC::grpc++_reflection protobuf::libprotobuf)
+    target_link_libraries(worker_production gRPC::grpc++_reflection protobuf::libprotobuf)
+endif()
+
+# Installation
+install(TARGETS coordinator_production worker_production
+    RUNTIME DESTINATION bin
+)
+
+# Custom targets for deployment
+add_custom_target(production_build
+    COMMAND ${CMAKE_COMMAND} --build . --config Release
+    COMMENT "Building production binaries"
+)
+
+add_custom_target(docker_production
+    COMMAND docker build -f ../Dockerfile.production -t daf-coordinator:production ..
+    COMMAND docker build -f ../Dockerfile.production.worker -t daf-worker:production ..
+    DEPENDS production_build
+    COMMENT "Building production Docker images"
+)
+
+# Print configuration summary
+message(STATUS "DAF Production Build Configuration")
+message(STATUS "==================================")
+message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Real Redis: ${USE_REAL_REDIS}")
+message(STATUS "Real HTTP: ${USE_REAL_HTTP}")
+message(STATUS "gRPC: ${USE_GRPC}")
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "==================================")
+
+# Packaging (optional)
+set(CPACK_PACKAGE_NAME "daf-production")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION "DAF Production Distributed Processing System")
+set(CPACK_PACKAGE_CONTACT "production@daf.io")
+set(CPACK_GENERATOR "TGZ;DEB")
+
+include(CPack)

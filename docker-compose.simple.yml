@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Redis database
+  redis:
+    image: redis:7-alpine
+    container_name: daf_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - daf_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Coordinator service
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    container_name: daf_coordinator
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - HTTP_PORT=8080
+      - GRPC_PORT=50051
+    networks:
+      - daf_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Worker service (can be scaled)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    command: ./worker
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COORDINATOR_HOST=coordinator
+      - COORDINATOR_PORT=50051
+    networks:
+      - daf_network
+    deploy:
+      replicas: 2
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  daf_network:
+    driver: bridge

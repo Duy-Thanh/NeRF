@@ -1,175 +1,174 @@
 #include "plugin_loader.h"
-#include <iostream>
+#include <dlfcn.h>
 #include <filesystem>
+#include <iostream>
+#include <mutex>
 
 namespace daf {
 
-PluginLoader& PluginLoader::Instance() {
+PluginLoader& PluginLoader::getInstance() {
     static PluginLoader instance;
     return instance;
 }
 
-Result<std::unique_ptr<IPlugin>> PluginLoader::LoadPlugin(const std::string& plugin_path) {
-    std::lock_guard<std::mutex> lock(mutex_);
+PluginLoader::~PluginLoader() {
+    shutdown();
+}
+
+bool PluginLoader::loadPlugin(const std::string& pluginPath, const std::string& pluginName) {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
     
-    if (!std::filesystem::exists(plugin_path)) {
-        return Result<std::unique_ptr<IPlugin>>(
-            ErrorCode::IO_ERROR, 
-            "Plugin file not found: " + plugin_path
-        );
+    if (plugins_.find(pluginName) != plugins_.end()) {
+        std::cout << "Plugin " << pluginName << " already loaded" << std::endl;
+        return true;
+    }
+    
+    if (!std::filesystem::exists(pluginPath)) {
+        std::cerr << "Plugin file not found: " << pluginPath << std::endl;
+        return false;
     }
     
     // Load the shared library
-    void* handle = dlopen(plugin_path.c_str(), RTLD_LAZY);
+    void* handle = dlopen(pluginPath.c_str(), RTLD_LAZY);
     if (!handle) {
-        return Result<std::unique_ptr<IPlugin>>(
-            ErrorCode::PLUGIN_ERROR,
-            "Failed to load plugin library: " + std::string(dlerror())
-        );
+        std::cerr << "Cannot load plugin " << pluginPath << ": " << dlerror() << std::endl;
+        return false;
     }
     
-    // Create plugin info
-    PluginInfo info;
-    info.handle = handle;
-    info.path = plugin_path;
+    // Clear any existing error
+    dlerror();
     
-    // Load symbols
-    if (!LoadPluginSymbols(info)) {
+    // Load the create function
+    typedef IPlugin* (*createPlugin_t)();
+    createPlugin_t createPlugin = (createPlugin_t) dlsym(handle, "createPlugin");
+    
+    const char* dlsym_error = dlerror();
+    if (dlsym_error) {
+        std::cerr << "Cannot load symbol createPlugin: " << dlsym_error << std::endl;
         dlclose(handle);
-        return Result<std::unique_ptr<IPlugin>>(
-            ErrorCode::PLUGIN_ERROR,
-            "Failed to load plugin symbols from: " + plugin_path
-        );
+        return false;
     }
     
-    // Get plugin name and version
-    info.name = info.get_name_func();
-    info.version = info.get_version_func();
+    // Load the destroy function
+    typedef void (*destroyPlugin_t)(IPlugin*);
+    destroyPlugin_t destroyPlugin = (destroyPlugin_t) dlsym(handle, "destroyPlugin");
     
-    // Check if plugin already loaded
-    if (loaded_plugins_.find(info.name) != loaded_plugins_.end()) {
+    dlsym_error = dlerror();
+    if (dlsym_error) {
+        std::cerr << "Cannot load symbol destroyPlugin: " << dlsym_error << std::endl;
         dlclose(handle);
-        return Result<std::unique_ptr<IPlugin>>(
-            ErrorCode::INVALID_STATE,
-            "Plugin already loaded: " + info.name
-        );
+        return false;
     }
     
     // Create plugin instance
-    IPlugin* plugin_ptr = info.create_func();
-    if (!plugin_ptr) {
+    std::shared_ptr<IPlugin> plugin(createPlugin(), destroyPlugin);
+    if (!plugin) {
+        std::cerr << "Failed to create plugin instance" << std::endl;
         dlclose(handle);
-        return Result<std::unique_ptr<IPlugin>>(
-            ErrorCode::PLUGIN_ERROR,
-            "Failed to create plugin instance: " + info.name
-        );
+        return false;
     }
-    
-    std::unique_ptr<IPlugin> plugin(plugin_ptr);
     
     // Store plugin info
-    loaded_plugins_[info.name] = std::move(info);
+    PluginInfo info;
+    info.instance = plugin;
+    info.libraryHandle = handle;
+    info.factory = nullptr;
     
-    std::cout << "Loaded plugin: " << info.name << " v" << info.version << std::endl;
+    plugins_[pluginName] = std::move(info);
     
-    return Result<std::unique_ptr<IPlugin>>(std::move(plugin));
-}
-
-bool PluginLoader::UnloadPlugin(const std::string& plugin_name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    UnloadPluginInternal(plugin_name);
+    std::cout << "Successfully loaded plugin: " << pluginName << std::endl;
     return true;
 }
 
-std::vector<std::string> PluginLoader::GetLoadedPlugins() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<std::string> plugins;
+std::shared_ptr<IPlugin> PluginLoader::getPlugin(const std::string& pluginName) {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
     
-    for (const auto& pair : loaded_plugins_) {
-        plugins.push_back(pair.first);
+    auto it = plugins_.find(pluginName);
+    if (it != plugins_.end()) {
+        return it->second.instance;
     }
     
-    return plugins;
+    return nullptr;
 }
 
-bool PluginLoader::IsPluginLoaded(const std::string& plugin_name) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return loaded_plugins_.find(plugin_name) != loaded_plugins_.end();
-}
-
-PluginLoader::~PluginLoader() {
-    std::lock_guard<std::mutex> lock(mutex_);
+bool PluginLoader::registerPlugin(const std::string& pluginName, PluginFactoryFunc factory) {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
     
-    // Unload all plugins
-    for (const auto& pair : loaded_plugins_) {
-        dlclose(pair.second.handle);
+    if (plugins_.find(pluginName) != plugins_.end()) {
+        std::cout << "Plugin " << pluginName << " already registered" << std::endl;
+        return true;
     }
     
-    loaded_plugins_.clear();
-}
-
-bool PluginLoader::LoadPluginSymbols(PluginInfo& info) {
-    // Load required function symbols
-    info.create_func = (IPlugin*(*)())dlsym(info.handle, "CreatePlugin");
-    if (!info.create_func) {
-        std::cerr << "Symbol 'CreatePlugin' not found: " << dlerror() << std::endl;
+    // Create plugin instance using factory
+    auto plugin = factory();
+    if (!plugin) {
+        std::cerr << "Failed to create plugin instance using factory" << std::endl;
         return false;
     }
     
-    info.destroy_func = (void(*)(IPlugin*))dlsym(info.handle, "DestroyPlugin");
-    if (!info.destroy_func) {
-        std::cerr << "Symbol 'DestroyPlugin' not found: " << dlerror() << std::endl;
-        return false;
-    }
+    // Store plugin info
+    PluginInfo info;
+    info.instance = plugin;
+    info.libraryHandle = nullptr;
+    info.factory = factory;
     
-    info.get_name_func = (const char*(*)())dlsym(info.handle, "GetPluginName");
-    if (!info.get_name_func) {
-        std::cerr << "Symbol 'GetPluginName' not found: " << dlerror() << std::endl;
-        return false;
-    }
+    plugins_[pluginName] = std::move(info);
     
-    info.get_version_func = (const char*(*)())dlsym(info.handle, "GetPluginVersion");
-    if (!info.get_version_func) {
-        std::cerr << "Symbol 'GetPluginVersion' not found: " << dlerror() << std::endl;
-        return false;
-    }
-    
+    std::cout << "Successfully registered plugin: " << pluginName << std::endl;
     return true;
 }
 
-void PluginLoader::UnloadPluginInternal(const std::string& plugin_name) {
-    auto it = loaded_plugins_.find(plugin_name);
-    if (it != loaded_plugins_.end()) {
-        dlclose(it->second.handle);
-        loaded_plugins_.erase(it);
-        std::cout << "Unloaded plugin: " << plugin_name << std::endl;
+std::vector<std::string> PluginLoader::getLoadedPlugins() const {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    
+    std::vector<std::string> pluginNames;
+    for (const auto& pair : plugins_) {
+        pluginNames.push_back(pair.first);
     }
+    
+    return pluginNames;
 }
 
-// PluginInstance implementation
-PluginInstance::PluginInstance(std::unique_ptr<IPlugin> plugin, const std::string& name)
-    : plugin_(std::move(plugin)), name_(name) {
-}
-
-PluginInstance::~PluginInstance() {
-    if (plugin_) {
-        plugin_->Shutdown();
+bool PluginLoader::unloadPlugin(const std::string& pluginName) {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    
+    auto it = plugins_.find(pluginName);
+    if (it == plugins_.end()) {
+        return false;
     }
+    
+    // Shutdown plugin if it exists
+    if (it->second.instance) {
+        it->second.instance->shutdown();
+        it->second.instance.reset();
+    }
+    
+    // Close library handle if it was dynamically loaded
+    if (it->second.libraryHandle) {
+        dlclose(it->second.libraryHandle);
+    }
+    
+    plugins_.erase(it);
+    std::cout << "Successfully unloaded plugin: " << pluginName << std::endl;
+    return true;
 }
 
-PluginInstance::PluginInstance(PluginInstance&& other) noexcept
-    : plugin_(std::move(other.plugin_)), name_(std::move(other.name_)) {
-}
-
-PluginInstance& PluginInstance::operator=(PluginInstance&& other) noexcept {
-    if (this != &other) {
-        if (plugin_) {
-            plugin_->Shutdown();
+void PluginLoader::shutdown() {
+    std::lock_guard<std::mutex> lock(pluginsMutex_);
+    
+    for (auto& pair : plugins_) {
+        if (pair.second.instance) {
+            pair.second.instance->shutdown();
+            pair.second.instance.reset();
         }
-        plugin_ = std::move(other.plugin_);
-        name_ = std::move(other.name_);
+        
+        if (pair.second.libraryHandle) {
+            dlclose(pair.second.libraryHandle);
+        }
     }
-    return *this;
+    
+    plugins_.clear();
+    std::cout << "All plugins shut down" << std::endl;
 }
 
-} // namespace daf
+}

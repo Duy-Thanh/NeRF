@@ -1,0 +1,3 @@
+"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\daf_coordinator.dir/objects.a
+D:\mingw64\bin\ar.exe qc CMakeFiles\daf_coordinator.dir/objects.a @CMakeFiles\daf_coordinator.dir\objects1.rsp
+D:\mingw64\bin\g++.exe -O3 -DNDEBUG  -static-libgcc -static-libstdc++ -Wl,--whole-archive CMakeFiles\daf_coordinator.dir/objects.a -Wl,--no-whole-archive -o daf_coordinator.exe -Wl,--out-implib,libdaf_coordinator.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\daf_coordinator.dir\linkLibs.rsp

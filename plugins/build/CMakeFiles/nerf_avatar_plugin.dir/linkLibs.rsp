@@ -1,0 +1,1 @@
+  -LD:/NeRF/plugins/../framework/build  D:/NeRF/plugins/../framework/build/libdaf_common.a -lws2_32 -lpsapi -static-libgcc -static-libstdc++ -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

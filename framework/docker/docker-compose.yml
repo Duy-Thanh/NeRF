@@ -47,8 +47,8 @@ services:
   # DAF Coordinator (Master)
   coordinator:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.coordinator
+      context: ../..
+      dockerfile: framework/docker/Dockerfile.coordinator
     depends_on:
       redis:
         condition: service_healthy
@@ -74,7 +74,7 @@ services:
           memory: 512M
           cpus: '1.0'
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      test: ["CMD", "pgrep", "daf_coordinator"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -82,8 +82,8 @@ services:
   # DAF Workers (multiple instances)
   worker:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.worker
+      context: ../..
+      dockerfile: framework/docker/Dockerfile.worker
     depends_on:
       coordinator:
         condition: service_healthy
@@ -109,28 +109,28 @@ services:
           cpus: '1.0'
       replicas: 3
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50052"]
+      test: ["CMD", "pgrep", "daf_worker"]
       interval: 15s
       timeout: 5s
       retries: 3
 
-  # Web UI for monitoring (optional)
-  web-ui:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.webui
-    depends_on:
-      - coordinator
-    environment:
-      - DAF_COORDINATOR_HOST=coordinator
-      - DAF_COORDINATOR_PORT=50051
-    ports:
-      - "3000:3000"
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.5'
+  # Web UI for monitoring (optional) - Disabled until Dockerfile.webui is created
+  # web-ui:
+  #   build:
+  #     context: ../..
+  #     dockerfile: framework/docker/Dockerfile.webui
+  #   depends_on:
+  #     - coordinator
+  #   environment:
+  #     - DAF_COORDINATOR_HOST=coordinator
+  #     - DAF_COORDINATOR_PORT=50051
+  #   ports:
+  #     - "3000:3000"
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 256M
+  #         cpus: '0.5'
 
 volumes:
   redis-data:

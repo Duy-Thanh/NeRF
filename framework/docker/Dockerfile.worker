@@ -19,10 +19,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 
 # Copy source code
-COPY . .
+COPY framework/ .
 
-# Build the project
-RUN mkdir -p build && cd build && \
+# Build the project  
+RUN rm -rf build && mkdir -p build && cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
     make -j$(nproc) daf_worker
 
@@ -31,12 +31,13 @@ FROM ubuntu:22.04
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libprotobuf32 \
-    libgrpc++1 \
-    libssl3 \
-    libhiredis0.14 \
-    libjsoncpp25 \
+    libprotobuf-dev \
+    libgrpc++-dev \
+    libssl-dev \
+    libhiredis-dev \
+    libjsoncpp-dev \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install grpc health probe for health checks

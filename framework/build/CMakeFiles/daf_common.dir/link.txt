@@ -1,0 +1,2 @@
+D:\mingw64\bin\ar.exe qc libdaf_common.a CMakeFiles/daf_common.dir/src/common/daf_utils.cpp.obj CMakeFiles/daf_common.dir/src/storage/redis_client.cpp.obj
+D:\mingw64\bin\ranlib.exe libdaf_common.a

@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Redis database
+  redis:
+    image: redis:7-alpine
+    container_name: daf_redis_demo
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    networks:
+      - daf_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Demo application
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    container_name: daf_demo
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    networks:
+      - daf_network
+
+networks:
+  daf_network:
+    driver: bridge

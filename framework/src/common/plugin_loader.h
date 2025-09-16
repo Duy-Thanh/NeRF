@@ -1,76 +1,76 @@
 #pragma once
 
-#include "daf_types.h"
-#include <dlfcn.h>
+#include <string>
+#include <memory>
 #include <unordered_map>
+#include <functional>
+#include <vector>
 #include <mutex>
+#include "daf_types.h"
 
 namespace daf {
-
-class PluginLoader {
-public:
-    static PluginLoader& Instance();
-    
-    // Load plugin from shared library
-    Result<std::unique_ptr<IPlugin>> LoadPlugin(const std::string& plugin_path);
-    
-    // Unload plugin
-    bool UnloadPlugin(const std::string& plugin_name);
-    
-    // Get loaded plugin info
-    std::vector<std::string> GetLoadedPlugins() const;
-    bool IsPluginLoaded(const std::string& plugin_name) const;
-    
-    ~PluginLoader();
-
-private:
-    PluginLoader() = default;
-    
-    struct PluginInfo {
-        void* handle;
-        std::string name;
-        std::string version;
-        std::string path;
-        
-        // Function pointers
-        IPlugin* (*create_func)();
-        void (*destroy_func)(IPlugin*);
-        const char* (*get_name_func)();
-        const char* (*get_version_func)();
+    // Plugin interface
+    class IPlugin {
+    public:
+        virtual ~IPlugin() = default;
+        virtual bool initialize(const std::string& config) = 0;
+        virtual bool process(const TaskData& input, TaskResult& output) = 0;
+        virtual void shutdown() = 0;
+        virtual std::string getName() const = 0;
+        virtual std::string getVersion() const = 0;
     };
-    
-    mutable std::mutex mutex_;
-    std::unordered_map<std::string, PluginInfo> loaded_plugins_;
-    
-    // Helper methods
-    bool LoadPluginSymbols(PluginInfo& info);
-    void UnloadPluginInternal(const std::string& plugin_name);
-};
 
-// RAII wrapper for plugin instances
-class PluginInstance {
-public:
-    PluginInstance(std::unique_ptr<IPlugin> plugin, const std::string& name);
-    ~PluginInstance();
-    
-    // Move constructor and assignment
-    PluginInstance(PluginInstance&& other) noexcept;
-    PluginInstance& operator=(PluginInstance&& other) noexcept;
-    
-    // Disable copy constructor and assignment
-    PluginInstance(const PluginInstance&) = delete;
-    PluginInstance& operator=(const PluginInstance&) = delete;
-    
-    IPlugin* Get() const { return plugin_.get(); }
-    IPlugin* operator->() const { return plugin_.get(); }
-    IPlugin& operator*() const { return *plugin_; }
-    
-    bool IsValid() const { return plugin_ != nullptr; }
-    const std::string& GetName() const { return name_; }
+    // Plugin factory function type
+    using PluginFactoryFunc = std::function<std::shared_ptr<IPlugin>()>;
 
-private:
-    std::unique_ptr<IPlugin> plugin_;
-    std::string name_;
-};
+    // Plugin loader class
+    class PluginLoader {
+    public:
+        static PluginLoader& getInstance();
+        
+        // Load plugin from shared library
+        bool loadPlugin(const std::string& pluginPath, const std::string& pluginName);
+        
+        // Get plugin instance
+        std::shared_ptr<IPlugin> getPlugin(const std::string& pluginName);
+        
+        // Register plugin factory (for static linking)
+        bool registerPlugin(const std::string& pluginName, PluginFactoryFunc factory);
+        
+        // List all loaded plugins
+        std::vector<std::string> getLoadedPlugins() const;
+        
+        // Unload plugin
+        bool unloadPlugin(const std::string& pluginName);
+        
+        // Shutdown all plugins
+        void shutdown();
+        
+    private:
+        PluginLoader() = default;
+        ~PluginLoader();
+        
+        struct PluginInfo {
+            std::shared_ptr<IPlugin> instance;
+            void* libraryHandle;
+            PluginFactoryFunc factory;
+        };
+        
+        std::unordered_map<std::string, PluginInfo> plugins_;
+        mutable std::mutex pluginsMutex_;
+    };
+}
 
-} // namespace daf
+// Macro for plugin registration
+#define REGISTER_PLUGIN(pluginName, pluginClass) \
+    extern "C" { \
+        daf::IPlugin* createPlugin() { \
+            return new pluginClass(); \
+        } \
+        void destroyPlugin(daf::IPlugin* plugin) { \
+            delete plugin; \
+        } \
+        const char* getPluginName() { \
+            return #pluginName; \
+        } \
+    }
