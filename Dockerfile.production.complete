@@ -46,8 +46,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy built binaries from builder stage
-COPY --from=builder /build/build/bin/ ./bin/
-COPY --from=builder /build/build/lib/ ./lib/
+COPY --from=builder /build/build/coordinator_production ./bin/coordinator_production
+COPY --from=builder /build/build/worker_production ./bin/worker_production
+COPY --from=builder /build/build/redis_demo ./bin/redis_demo
+COPY --from=builder /build/build/libnerf_avatar_plugin.so ./lib/libnerf_avatar_plugin.so
 
 # Create directories for plugins and data
 RUN mkdir -p /app/plugins /app/data /app/logs && \

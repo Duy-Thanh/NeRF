@@ -1,5 +1,6 @@
 #include "../common/daf_types.h"
 #include "../common/daf_utils.h"
+#include "../common/plugin_loader.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -94,8 +95,6 @@ private:
     std::atomic<bool> is_registered_;
     std::atomic<int> active_task_count_;
     std::chrono::steady_clock::time_point last_heartbeat_;
-    
-    PluginLoader plugin_loader_;
     
     // Background threads
     std::thread heartbeat_thread_;
@@ -299,83 +298,76 @@ ErrorCode Worker::execute_map_task(const Task& task) {
     plugin_path += ".so";
 #endif
     
-    if (!plugin_loader_.is_loaded()) {
-        auto result = plugin_loader_.load_plugin(plugin_path);
-        if (result != ErrorCode::SUCCESS) {
-            logger_.error("Failed to load plugin: " + plugin_loader_.get_last_error());
-            return result;
-        }
-    }
-    
-    auto map_function = plugin_loader_.get_map_function();
-    if (!map_function) {
-        logger_.error("Map function not found in plugin");
+    auto& plugin_loader = PluginLoader::getInstance();
+    if (!plugin_loader.loadPlugin(plugin_path, "nerf_avatar")) {
+        logger_.error("Failed to load plugin: " + plugin_path);
         return ErrorCode::PLUGIN_ERROR;
     }
     
-    // Create map context
-    MapContextImpl context(task.input_files, task.parameters);
-    
-    try {
-        // Execute map function
-        map_function(&context);
-        
-        // Save intermediate results
-        const auto& emitted_data = context.get_emitted_data();
-        for (const auto& [key, values] : emitted_data) {
-            std::string output_file = "intermediate/" + task.id + "_" + key + ".txt";
-            Utils::create_directory("intermediate");
-            
-            std::ofstream out(output_file);
-            for (const auto& value : values) {
-                out << value << std::endl;
-            }
-        }
-        
-        logger_.info("Map task completed: " + task.id);
-        return ErrorCode::SUCCESS;
-        
-    } catch (const std::exception& e) {
-        logger_.error("Map task failed: " + std::string(e.what()));
-        return ErrorCode::UNKNOWN_ERROR;
+    auto plugin = plugin_loader.getPlugin("nerf_avatar");
+    if (!plugin) {
+        logger_.error("Plugin not found: nerf_avatar");
+        return ErrorCode::PLUGIN_ERROR;
     }
+    
+    // Create task data for plugin processing
+    TaskData task_data;
+    task_data.task_id = task.id;
+    task_data.data_type = "map";
+    task_data.input_path = task.input_files.empty() ? "" : task.input_files[0];
+    task_data.metadata = task.parameters;
+    
+    TaskResult task_result;
+    if (!plugin->process(task_data, task_result)) {
+        logger_.error("Plugin processing failed: " + task_result.error_message);
+        return ErrorCode::PLUGIN_ERROR;
+    }
+    
+    // Save results to output file
+    std::ofstream out(task.output_file);
+    if (out.is_open()) {
+        out.write(reinterpret_cast<const char*>(task_result.output_data.data()), 
+                  task_result.output_data.size());
+        out.close();
+    }
+    
+    logger_.info("Map task completed: " + task.id);
+    return ErrorCode::SUCCESS;
 }
 
 ErrorCode Worker::execute_reduce_task(const Task& task) {
     logger_.info("Executing reduce task: " + task.id);
     
-    auto reduce_function = plugin_loader_.get_reduce_function();
-    if (!reduce_function) {
-        logger_.error("Reduce function not found in plugin");
+    auto& plugin_loader = PluginLoader::getInstance();
+    auto plugin = plugin_loader.getPlugin("nerf_avatar");
+    if (!plugin) {
+        logger_.error("Plugin not found: nerf_avatar");
         return ErrorCode::PLUGIN_ERROR;
     }
     
-    // Load values for this key (simplified - assumes key is in task parameters)
-    std::vector<std::string> values;
-    std::string key = task.parameters.find("key") != task.parameters.end() ? 
-                     task.parameters.at("key") : "default";
+    // Create task data for plugin processing
+    TaskData task_data;
+    task_data.task_id = task.id;
+    task_data.data_type = "reduce";
+    task_data.input_path = task.input_files.empty() ? "" : task.input_files[0];
+    task_data.metadata = task.parameters;
     
-    // Create reduce context
-    ReduceContextImpl context(values, task.parameters);
-    
-    try {
-        // Execute reduce function
-        reduce_function(key.c_str(), &context);
-        
-        // Save final results
-        const auto& emitted_data = context.get_emitted_data();
-        std::ofstream out(task.output_file);
-        for (const auto& value : emitted_data) {
-            out << value << std::endl;
-        }
-        
-        logger_.info("Reduce task completed: " + task.id);
-        return ErrorCode::SUCCESS;
-        
-    } catch (const std::exception& e) {
-        logger_.error("Reduce task failed: " + std::string(e.what()));
-        return ErrorCode::UNKNOWN_ERROR;
+    TaskResult task_result;
+    if (!plugin->process(task_data, task_result)) {
+        logger_.error("Plugin processing failed: " + task_result.error_message);
+        return ErrorCode::PLUGIN_ERROR;
     }
+    
+    // Save results to output file
+    std::ofstream out(task.output_file);
+    if (out.is_open()) {
+        out.write(reinterpret_cast<const char*>(task_result.output_data.data()), 
+                  task_result.output_data.size());
+        out.close();
+    }
+    
+    logger_.info("Reduce task completed: " + task.id);
+    return ErrorCode::SUCCESS;
 }
 
 ErrorCode Worker::register_with_coordinator() {

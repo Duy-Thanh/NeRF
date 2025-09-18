@@ -16,6 +16,10 @@ include_directories(src/storage)
 include_directories(src/coordinator)
 include_directories(src/worker)
 
+# Set compiler flags for position-independent code
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+
 # Common library with all production utilities
 add_library(daf_production_common STATIC
     src/common/daf_utils.cpp
@@ -48,6 +52,7 @@ add_executable(coordinator_production
 
 target_link_libraries(coordinator_production
     daf_production_common
+    cpprest
     pthread
 )
 
