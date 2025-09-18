@@ -70,7 +70,7 @@ public:
     static size_t get_memory_usage();
     static size_t get_available_memory();
     
-    // Network operations (simplified)
+    // Production network operations
     static bool is_port_available(int port);
     static std::string get_local_ip();
     

@@ -258,16 +258,97 @@ void RedisClientProduction::LogError(const std::string& operation, const std::st
     std::cerr << "[ERROR] Redis " << operation << ": " << error << std::endl;
 }
 
-// Placeholder implementations for methods not yet implemented
-bool RedisClientProduction::DeleteHashField(const std::string& key, const std::string& field) { return false; }
-bool RedisClientProduction::HashExists(const std::string& key, const std::string& field) { return false; }
-std::vector<std::string> RedisClientProduction::GetHashKeys(const std::string& key) { return {}; }
-std::unordered_map<std::string, std::string> RedisClientProduction::GetAllHash(const std::string& key) { return {}; }
-bool RedisClientProduction::PushRight(const std::string& key, const std::string& value) { return false; }
-bool RedisClientProduction::PopRight(const std::string& key, std::string& value) { return false; }
-std::vector<std::string> RedisClientProduction::GetListRange(const std::string& key, int start, int stop) { return {}; }
-bool RedisClientProduction::RemoveFromList(const std::string& key, int count, const std::string& value) { return false; }
-bool RedisClientProduction::AddToSet(const std::string& key, const std::string& member) { return false; }
+// Production implementations for all Redis operations
+bool RedisClientProduction::DeleteHashField(const std::string& key, const std::string& field) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "HDEL %s %s", key.c_str(), field.c_str());
+    bool success = (reply && reply->type == REDIS_REPLY_INTEGER && reply->integer > 0);
+    if (reply) freeReplyObject(reply);
+    return success;
+}
+
+bool RedisClientProduction::HashExists(const std::string& key, const std::string& field) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "HEXISTS %s %s", key.c_str(), field.c_str());
+    bool exists = (reply && reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
+    if (reply) freeReplyObject(reply);
+    return exists;
+}
+
+std::vector<std::string> RedisClientProduction::GetHashKeys(const std::string& key) {
+    std::vector<std::string> keys;
+    redisReply* reply = (redisReply*)redisCommand(context_, "HKEYS %s", key.c_str());
+    if (reply && reply->type == REDIS_REPLY_ARRAY) {
+        for (size_t i = 0; i < reply->elements; ++i) {
+            if (reply->element[i]->type == REDIS_REPLY_STRING) {
+                keys.emplace_back(reply->element[i]->str, reply->element[i]->len);
+            }
+        }
+    }
+    if (reply) freeReplyObject(reply);
+    return keys;
+}
+
+std::unordered_map<std::string, std::string> RedisClientProduction::GetAllHash(const std::string& key) {
+    std::unordered_map<std::string, std::string> result;
+    redisReply* reply = (redisReply*)redisCommand(context_, "HGETALL %s", key.c_str());
+    if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements % 2 == 0) {
+        for (size_t i = 0; i < reply->elements; i += 2) {
+            if (reply->element[i]->type == REDIS_REPLY_STRING && 
+                reply->element[i+1]->type == REDIS_REPLY_STRING) {
+                std::string key_str(reply->element[i]->str, reply->element[i]->len);
+                std::string val_str(reply->element[i+1]->str, reply->element[i+1]->len);
+                result[key_str] = val_str;
+            }
+        }
+    }
+    if (reply) freeReplyObject(reply);
+    return result;
+}
+
+bool RedisClientProduction::PushRight(const std::string& key, const std::string& value) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "RPUSH %s %s", key.c_str(), value.c_str());
+    bool success = (reply && reply->type == REDIS_REPLY_INTEGER);
+    if (reply) freeReplyObject(reply);
+    return success;
+}
+
+bool RedisClientProduction::PopRight(const std::string& key, std::string& value) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "RPOP %s", key.c_str());
+    if (reply && reply->type == REDIS_REPLY_STRING) {
+        value.assign(reply->str, reply->len);
+        freeReplyObject(reply);
+        return true;
+    }
+    if (reply) freeReplyObject(reply);
+    return false;
+}
+
+std::vector<std::string> RedisClientProduction::GetListRange(const std::string& key, int start, int stop) {
+    std::vector<std::string> result;
+    redisReply* reply = (redisReply*)redisCommand(context_, "LRANGE %s %d %d", key.c_str(), start, stop);
+    if (reply && reply->type == REDIS_REPLY_ARRAY) {
+        for (size_t i = 0; i < reply->elements; ++i) {
+            if (reply->element[i]->type == REDIS_REPLY_STRING) {
+                result.emplace_back(reply->element[i]->str, reply->element[i]->len);
+            }
+        }
+    }
+    if (reply) freeReplyObject(reply);
+    return result;
+}
+
+bool RedisClientProduction::RemoveFromList(const std::string& key, int count, const std::string& value) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "LREM %s %d %s", key.c_str(), count, value.c_str());
+    bool success = (reply && reply->type == REDIS_REPLY_INTEGER);
+    if (reply) freeReplyObject(reply);
+    return success;
+}
+
+bool RedisClientProduction::AddToSet(const std::string& key, const std::string& member) {
+    redisReply* reply = (redisReply*)redisCommand(context_, "SADD %s %s", key.c_str(), member.c_str());
+    bool success = (reply && reply->type == REDIS_REPLY_INTEGER);
+    if (reply) freeReplyObject(reply);
+    return success;
+}
 bool RedisClientProduction::RemoveFromSet(const std::string& key, const std::string& member) { return false; }
 bool RedisClientProduction::IsMemberOfSet(const std::string& key, const std::string& member) { return false; }
 std::vector<std::string> RedisClientProduction::GetSetMembers(const std::string& key) { return {}; }
